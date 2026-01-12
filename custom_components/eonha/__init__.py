@@ -10,8 +10,6 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from eonapi.api import EonNextAPI
 from .coordinator import EonNextDataUpdateCoordinator
 from .const import DOMAIN, CONF_BACKFILL_DAYS, CONF_TARGET_STATISTIC_ID, CONF_GLOW_USERNAME, CONF_GLOW_PASSWORD
-from homeassistant.helpers.httpx_client import get_async_client
-
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -20,7 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up E.ON Next Home Assistant from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    api = EonNextAPI(client=get_async_client(hass))
+    api = EonNextAPI()
     try:
         username = entry.data[CONF_USERNAME]
         password = entry.data[CONF_PASSWORD]
