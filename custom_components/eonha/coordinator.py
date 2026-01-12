@@ -1,5 +1,5 @@
 """DataUpdateCoordinator for E.ON Next Home Assistant."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 try:
     from glowmarkt import BrightClient as Glow
@@ -189,9 +189,9 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         end_time = datetime.now()
         # Ensure UTC/Naive handling
         if start_time.tzinfo:
-            start_time = start_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            start_time = start_time.astimezone(timezone.utc).replace(tzinfo=None)
         if end_time.tzinfo:
-             end_time = end_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+             end_time = end_time.astimezone(timezone.utc).replace(tzinfo=None)
 
         # Format exactly as API wants
         str_from = start_time.strftime('%Y-%m-%dT%H:%M:%S')
@@ -237,7 +237,7 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
             val = float(val_raw)
             
             # ts is unix timestamp
-            dt = datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
             
             # Add timezone info (UTC)
             dt_iso = dt.replace(microsecond=0).isoformat()

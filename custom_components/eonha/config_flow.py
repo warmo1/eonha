@@ -98,20 +98,20 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 {
                     vol.Optional(
                         CONF_BACKFILL_DAYS,
-                        default=backfill_default,
+                        description={"suggested_value": backfill_default},
                     ): int,
                     # Use str for text fields, defaulting to empty string
                     vol.Optional(
                         CONF_TARGET_STATISTIC_ID,
-                        default=target_default,
+                        description={"suggested_value": target_default},
                     ): str,
                     vol.Optional(
                         CONF_GLOW_USERNAME,
-                        default=glow_user_default,
+                        description={"suggested_value": glow_user_default},
                     ): str,
                     vol.Optional(
                         CONF_GLOW_PASSWORD,
-                        default=glow_pass_default,
+                        description={"suggested_value": glow_pass_default},
                     ): str,
                 }
             ),
