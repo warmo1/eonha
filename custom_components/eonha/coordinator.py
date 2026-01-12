@@ -56,11 +56,10 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                 meters = await self.api.get_meters(account)
                 
                 for meter in meters:
-                    # Fetch latest consumption
-                    # We fetch last 7 days to ensure we get something, 
-                    # but we are mainly interested in the latest.
+                    # Fetch consumption data
+                    # We fetch last 30 days to ensure we can backfill history
                     end_date = datetime.now()
-                    start_date = end_date - timedelta(days=7)
+                    start_date = end_date - timedelta(days=30)
                     
                     consumption = await self.api.get_consumption_data(
                         account,
@@ -69,19 +68,15 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                         start_date,
                         end_date
                     )
-
-                    latest_reading = None
+                    
+                    # Sort by date
                     if consumption:
-                        # Assuming the API returns sorted or we sort it?
-                        # The code in api.py appends, usually efficient. 
-                        # Let's sort by date to be sure.
-                        consumption.sort(key=lambda x: x['startAt'], reverse=True)
-                        latest_reading = consumption[0]
+                        consumption.sort(key=lambda x: x['startAt'])
 
                     meter_entry = {
                         "info": meter,
                         "account": account,
-                        "latest_reading": latest_reading
+                        "consumption": consumption
                     }
                     all_meter_data.append(meter_entry)
 
