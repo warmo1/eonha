@@ -53,7 +53,8 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
         self._meter_id = meter_data["info"]["id"]
         
         self._attr_name = f"E.ON Next {self._meter_type.capitalize()} ({self._serial})"
-        self._attr_unique_id = f"eon_next_{self._serial}_{self._meter_type}_consumption"
+        # Revert to old ID to preserve entity availability for users upgrading from v1.0
+        self._attr_unique_id = f"eon_next_{self._serial}_{self._meter_type}_latest"
         self._attr_device_class = SensorDeviceClass.ENERGY
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
