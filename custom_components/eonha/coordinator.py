@@ -214,9 +214,13 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         }
         
         try:
-            # Re-use session from client if possible, or just use the client's session
-            # client.session is a requests.Session
-            resp = self.glow_client.session.get(url, params=params)
+            # Re-use session from client, but must include auth headers
+            headers = {
+                "Content-Type": "application/json",
+                "applicationId": self.glow_client.application,
+                "token": self.glow_client.token
+            }
+            resp = self.glow_client.session.get(url, headers=headers, params=params)
             
             if resp.status_code != 200:
                 _LOGGER.warning(f"Glow API Error: {resp.status_code} {resp.text} | URL: {url} | Params: {params}")
