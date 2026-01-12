@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -107,6 +107,12 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
 
     async def _async_import_historical_stats(self, consumption_list: list[dict]):
         """Import historical statistics."""
+        if not consumption_list:
+            _LOGGER.debug("No consumption data to import")
+            return
+            
+        _LOGGER.debug(f"Processing {len(consumption_list)} consumption records for statistics import")
+        
         # Use target statistic ID if configured, otherwise use stable default
         if self.coordinator.target_statistic_id:
             statistic_id = self.coordinator.target_statistic_id
@@ -134,85 +140,76 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
             hourly_data[hour_start] += val
 
         if not hourly_data:
+            _LOGGER.debug("No hourly data aggregated")
             return
 
         sorted_hours = sorted(hourly_data.keys())
         start_time = sorted_hours[0]
         end_time = sorted_hours[-1] + timedelta(hours=1)
+        
+        _LOGGER.debug(f"Aggregated {len(sorted_hours)} hours of data from {start_time} to {end_time}")
 
         # 2. Check for existing statistics to avoid duplicates
-        # We query the recorder to see which hours already have data
-        existing_stats = await get_instance(self.hass).async_add_executor_job(
-            statistics_during_period,
-            self.hass,
-            start_time,
-            end_time,
-            {statistic_id},
-            "hour",
-            None,
-            {"sum"}
-        )
+        try:
+            existing_stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                start_time,
+                end_time,
+                {statistic_id},
+                "hour",
+                None,
+                {"sum"}
+            )
+        except Exception as e:
+            _LOGGER.warning(f"Error checking existing stats: {e}")
+            existing_stats = {}
         
         existing_hours = set()
         if statistic_id in existing_stats:
             for stat in existing_stats[statistic_id]:
                 if "start" in stat:
-                    # stat['start'] is usually a timestamp (float/int)
                     dt = datetime.fromtimestamp(stat["start"], tz=timezone.utc)
                     existing_hours.add(dt)
+        
+        _LOGGER.debug(f"Found {len(existing_hours)} existing hours in database")
 
         # 3. Build list of statistics to import
         statistics = []
         
-        # We need a running total for 'sum' (which technically is the cumulative total in DB).
-        # However, if we are backfilling into a gap, we might not know the absolute total.
-        # But E.ON API gives us the meter reading? 
-        # Actually API response records have 'startAt', 'endAt', 'value'.
-        # None of these are the cumulative meter reading; 'value' is consumption.
-        # So we can only provide the 'sum' delta if the import API supports it.
-        # The spec says: "sum -- energy used during that hour (kWh delta)".
-        # We will trust the spec/helper to handle this for 'total_increasing'.
-
-        # Calculate a local running sum just in case we need it for 'state'
-        # But 'state' should be the meter reading. We don't have absolute meter reading from this API endpoint?
-        # Coordinator comment says: "state = total_kwh".
-        # If we don't have the initial meter reading, we can't emit a correct 'state' (cumulative).
-        # But for Energy Dashboard, 'sum' (the change) is what matters most.
-        
-        # NOTE: If we are injecting into an EXISTING sensor (Hildebrand), 
-        # providing a 'state' that is just the day's total (e.g. 10kWh) vs the real meter reading (15000kWh)
-        # might confuse things if specific rows are looked at.
-        # But 'sum' (delta) is the critical part for the bar charts.
-
-        current_cumulative_simulated = 0.0 # This might be wrong if we don't know the start.
+        # For total_increasing sensors, sum should be cumulative
+        # We need to track the running total
+        running_sum = 0.0
 
         for hour_start in sorted_hours:
             if hour_start in existing_hours:
                 continue
                 
             val = hourly_data[hour_start]
-            current_cumulative_simulated += val
+            running_sum += val
             
             statistics.append(
                 StatisticData(
                     start=hour_start,
-                    state=None, # Let HA calculate state if possible, or omit if we don't know absolute meter reading
-                    sum=val  # Sum is the delta for the hour per spec requirements
+                    state=running_sum,  # Cumulative total
+                    sum=running_sum     # Sum is cumulative for total_increasing
                 )
             )
 
         if statistics:
-            _LOGGER.debug(f"Importing {len(statistics)} statistics for {statistic_id}")
+            _LOGGER.info(f"Importing {len(statistics)} new statistics for {statistic_id}")
             async_import_statistics(
                 self.hass,
                 StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
                     name=self.name,
-                    source=DOMAIN if not self.coordinator.target_statistic_id else "recorder", # Keep source if targetting ext
+                    source=DOMAIN,
                     statistic_id=statistic_id,
                     unit_of_measurement=self.native_unit_of_measurement,
                 ),
                 statistics,
             )
+        else:
+            _LOGGER.debug(f"No new statistics to import (all hours already exist)")
 
