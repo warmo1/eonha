@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 import logging
 try:
-    from pyglowmarkt import Glow
+    from glowmarkt import BrightClient as Glow
 except ImportError:
     Glow = None
 
@@ -140,7 +140,45 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
     def _fetch_glow_data(self, start_time: datetime) -> list[dict]:
         """Fetch data from Glowmarkt (Sync method to be run in executor)."""
         if not self.glow_client:
-            self.glow_client = Glow(self.glow_username, self.glow_password)
+            try:
+                # Assuming Glow is BrightClient
+                self.glow_client = Glow(self.glow_username, self.glow_password)
+            except Exception as e:
+                 _LOGGER.warning(f"Failed to initialize Glowmarkt client: {e}")
+                 return []
+        
+        # We need to find the right resource. 
+        # For now, just grab the first 'electricity.consumption' resource found.
+        target_resource = None
+        
+        try:
+            # Use get_virtual_entities if available
+            if hasattr(self.glow_client, 'get_virtual_entities'):
+                entities = self.glow_client.get_virtual_entities()
+            elif hasattr(self.glow_client, 'virtual_entities'):
+                entities = self.glow_client.virtual_entities
+            else:
+                 _LOGGER.warning("Glow client missing virtual_entities methods")
+                 return []
+                 
+            for virt in entities:
+                # Use get_resources if available
+                if hasattr(virt, 'get_resources'):
+                    resources = virt.get_resources()
+                elif hasattr(virt, 'resources'):
+                    resources = virt.resources
+                else:
+                    continue
+                    
+                for res in resources:
+                    if res.classifier == 'electricity.consumption':
+                        target_resource = res
+                        break
+                if target_resource:
+                    break
+        except Exception as e:
+            _LOGGER.warning(f"Error finding Glow resource: {e}")
+            return []
         
         # We need to find the right resource. 
         # For now, just grab the first 'electricity.consumption' resource found.
@@ -170,9 +208,14 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
             return results
 
         for entry in data:
-            # entry structure: [timestamp, value]
+            # entry structure: [timestamp, value_obj]
             ts = entry[0]
-            val = float(entry[1])
+            val_obj = entry[1]
+            
+            if hasattr(val_obj, 'value'):
+                val = float(val_obj.value)
+            else:
+                val = float(val_obj)
             
             # Convert to E.ON format
             
