@@ -7,6 +7,7 @@ except ImportError:
     Glow = None
 
 from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -25,6 +26,7 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
+        entry: ConfigEntry,
         api: EonNextAPI,
         username: str,
         password: str,
@@ -37,6 +39,7 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=DOMAIN,
             update_interval=UPDATE_INTERVAL,
         )

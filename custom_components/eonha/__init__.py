@@ -35,7 +35,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
              return False
         
         coordinator = EonNextDataUpdateCoordinator(
-            hass, 
+            hass,
+            entry,
             api, 
             username, 
             password, 
