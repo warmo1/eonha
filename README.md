@@ -1,4 +1,7 @@
-# ![E.ON Next](images/logo.png) E.ON Home Assistant Integration Project
+# <img src="https://raw.githubusercontent.com/warmo1/eonha/main/images/logo.png" width="50" height="50" alt="E.ON Next Logo"> E.ON Home Assistant Integration
+
+![Version](https://img.shields.io/badge/version-v1.1.0-blue)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
 This project aims to integrate E.ON Next API data into Home Assistant.
 It currently includes the `eonapi` library and scripts to verify connection.
