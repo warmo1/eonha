@@ -148,7 +148,6 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                  return []
         
         # We need to find the right resource. 
-        # For now, just grab the first 'electricity.consumption' resource found.
         target_resource = None
         
         try:
@@ -179,57 +178,72 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.warning(f"Error finding Glow resource: {e}")
             return []
-        
-        # We need to find the right resource. 
-        # For now, just grab the first 'electricity.consumption' resource found.
-        target_resource = None
-        for virt in self.glow_client.virtual_entities:
-            for res in virt.resources:
-                if res.classifier == 'electricity.consumption':
-                    target_resource = res
-                    break
-            if target_resource:
-                break
-        
+            
         if not target_resource:
             return []
 
-        # Fetch readings
+        # Fetch readings using DIRECT API CALL to avoid pyglowmarkt date formatting bug
+        # The library sends ISO format with timezone which the API rejects (400).
+        # We must send YYYY-MM-DDTHH:mm:ss
+        
         end_time = datetime.now()
-        # Ensure naive because library likely expects naive local or UTC
+        # Ensure UTC/Naive handling
         if start_time.tzinfo:
-            start_time = start_time.replace(tzinfo=None) 
+            start_time = start_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        if end_time.tzinfo:
+             end_time = end_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+        # Format exactly as API wants
+        str_from = start_time.strftime('%Y-%m-%dT%H:%M:%S')
+        str_to = end_time.strftime('%Y-%m-%dT%H:%M:%S')
         
-        # PT30M = Half Hourly to match E.ON
-        data = target_resource.get_readings(start_time, end_time, period='PT30M')
+        url = f"https://api.glowmarkt.com/api/v0-1/resource/{target_resource.id}/readings"
+        params = {
+            "from": str_from,
+            "to": str_to,
+            "period": "PT30M",
+            "offset": 0,
+            "function": "sum",
+            "nulls": 0
+        }
         
+        try:
+            # Re-use session from client if possible, or just use the client's session
+            # client.session is a requests.Session
+            resp = self.glow_client.session.get(url, params=params)
+            
+            if resp.status_code != 200:
+                _LOGGER.warning(f"Glow API Error: {resp.status_code} {resp.text}")
+                return []
+                
+            data = resp.json().get('data', [])
+        except Exception as e:
+            _LOGGER.warning(f"Failed to fetch Glow readings: {e}")
+            return []
+
         results = []
         if not data:
             return results
 
         for entry in data:
-            # entry structure: [timestamp, value_obj]
+            # entry: [timestamp, value]
             ts = entry[0]
-            val_obj = entry[1]
+            val_raw = entry[1]
             
-            if hasattr(val_obj, 'value'):
-                val = float(val_obj.value)
-            else:
-                val = float(val_obj)
-            
-            # Convert to E.ON format
-            
-            # ts is likely a unix timestamp or ISO string.
-            if isinstance(ts, int):
-                dt = datetime.fromtimestamp(ts)
-            else:
-                dt = datetime.fromisoformat(str(ts))
+            if val_raw is None:
+                continue
                 
+            # Handle object vs float (though raw JSON usually gives float/int)
+            val = float(val_raw)
+            
+            # ts is unix timestamp
+            dt = datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+            
             # Add timezone info (UTC)
-            dt_iso = dt.astimezone().replace(microsecond=0).isoformat()
+            dt_iso = dt.replace(microsecond=0).isoformat()
             
             # EndAt is Start + 30m
-            end_dt_iso = (dt + timedelta(minutes=30)).astimezone().replace(microsecond=0).isoformat()
+            end_dt_iso = (dt + timedelta(minutes=30)).replace(microsecond=0).isoformat()
             
             results.append({
                 "startAt": dt_iso,
