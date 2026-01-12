@@ -1,4 +1,4 @@
-# E.ON Home Assistant Integration Project
+# ![E.ON Next](images/logo.png) E.ON Home Assistant Integration Project
 
 This project aims to integrate E.ON Next API data into Home Assistant.
 It currently includes the `eonapi` library and scripts to verify connection.
