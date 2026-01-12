@@ -77,37 +77,41 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
+        # Use .get() with explicit defaults to prevent KeyErrors or NoneTypes
+        # Handling the case where options might be None (though rare/impossible in recent HA)
+        options = self.config_entry.options
+        data = self.config_entry.data
+        
+        backfill_default = options.get(CONF_BACKFILL_DAYS, data.get(CONF_BACKFILL_DAYS, 90))
+        target_default = options.get(CONF_TARGET_STATISTIC_ID, data.get(CONF_TARGET_STATISTIC_ID, ""))
+        glow_user_default = options.get(CONF_GLOW_USERNAME, data.get(CONF_GLOW_USERNAME, ""))
+        glow_pass_default = options.get(CONF_GLOW_PASSWORD, data.get(CONF_GLOW_PASSWORD, ""))
+
+        # Ensure strings
+        if target_default is None: target_default = ""
+        if glow_user_default is None: glow_user_default = ""
+        if glow_pass_default is None: glow_pass_default = ""
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
                         CONF_BACKFILL_DAYS,
-                        default=self.config_entry.options.get(
-                            CONF_BACKFILL_DAYS, 
-                            self.config_entry.data.get(CONF_BACKFILL_DAYS, 90)
-                        ),
+                        default=backfill_default,
                     ): int,
+                    # Use str for text fields, defaulting to empty string
                     vol.Optional(
                         CONF_TARGET_STATISTIC_ID,
-                        default=self.config_entry.options.get(
-                            CONF_TARGET_STATISTIC_ID,
-                            self.config_entry.data.get(CONF_TARGET_STATISTIC_ID, "")
-                        ),
+                        default=target_default,
                     ): str,
                     vol.Optional(
                         CONF_GLOW_USERNAME,
-                        default=self.config_entry.options.get(
-                            CONF_GLOW_USERNAME,
-                            self.config_entry.data.get(CONF_GLOW_USERNAME, "")
-                        ),
+                        default=glow_user_default,
                     ): str,
                     vol.Optional(
                         CONF_GLOW_PASSWORD,
-                        default=self.config_entry.options.get(
-                            CONF_GLOW_PASSWORD,
-                            self.config_entry.data.get(CONF_GLOW_PASSWORD, "")
-                        ),
+                        default=glow_pass_default,
                     ): str,
                 }
             ),
