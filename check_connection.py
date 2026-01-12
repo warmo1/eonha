@@ -40,7 +40,7 @@ async def main():
                 print(f"  - ({meter['type']}) {meter['serial']} (ID: {meter['id']})")
                 
                 # Fetch extensive data
-                start_date = datetime.now() - timedelta(days=7)
+                start_date = datetime.now() - timedelta(days=90)
                 end_date = datetime.now()
                 
                 print(f"    Fetching consumption from {start_date.date()} to {end_date.date()}...")
@@ -52,6 +52,12 @@ async def main():
                     end_date
                 )
                 print(f"    Retrieved {len(data)} records.")
+                if data:
+                    print("    Latest 5 records:")
+                    # Sort just in case the API returns them unsorted, though usually it's chronological
+                    sorted_data = sorted(data, key=lambda x: x['startAt'])
+                    for record in sorted_data[-5:]:
+                        print(f"      {record['startAt']} -> {record['value']} kWh")
 
     except Exception as e:
         print(f"Error fetching data: {e}")

@@ -8,7 +8,8 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/warmo1/eonha/issues",
   "requirements": [
-    "eonapi>=0.5.0"
+    "eonapi>=0.5.0",
+    "pyglowmarkt>=0.5.6"
   ],
   "version": "1.0.0"
 }
