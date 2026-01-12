@@ -182,20 +182,26 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         if not target_resource:
             return []
 
-        # Fetch readings using DIRECT API CALL to avoid pyglowmarkt date formatting bug
-        # The library sends ISO format with timezone which the API rejects (400).
-        # We must send YYYY-MM-DDTHH:mm:ss
-        
-        end_time = datetime.now()
-        # Ensure UTC/Naive handling
-        if start_time.tzinfo:
-            start_time = start_time.astimezone(timezone.utc).replace(tzinfo=None)
-        if end_time.tzinfo:
-             end_time = end_time.astimezone(timezone.utc).replace(tzinfo=None)
+        # Helper to format as YYYY-MM-DDTHH:mm:ss in UTC
+        def to_glow_str(dt: datetime) -> str:
+            # Convert to aware UTC
+            if dt.tzinfo is None:
+                dt = dt.astimezone(timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt.strftime('%Y-%m-%dT%H:%M:%S')
 
-        # Format exactly as API wants
-        str_from = start_time.strftime('%Y-%m-%dT%H:%M:%S')
-        str_to = end_time.strftime('%Y-%m-%dT%H:%M:%S')
+        end_time = datetime.now(timezone.utc)
+        
+        # Guard against future start time or start > end
+        if start_time > end_time:
+            # If start is in future (clock skew?), fetch at least small window or return
+            # But let's just clamp it or log it
+            _LOGGER.debug(f"Glow start time {start_time} is in future vs {end_time}, adjusting window")
+            start_time = end_time - timedelta(hours=24) # Fallback
+
+        str_from = to_glow_str(start_time)
+        str_to = to_glow_str(end_time)
         
         url = f"https://api.glowmarkt.com/api/v0-1/resource/{target_resource.id}/readings"
         params = {
@@ -213,7 +219,7 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
             resp = self.glow_client.session.get(url, params=params)
             
             if resp.status_code != 200:
-                _LOGGER.warning(f"Glow API Error: {resp.status_code} {resp.text}")
+                _LOGGER.warning(f"Glow API Error: {resp.status_code} {resp.text} | URL: {url} | Params: {params}")
                 return []
                 
             data = resp.json().get('data', [])
