@@ -1,7 +1,7 @@
 """Eon Next API client."""
 
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -241,6 +241,17 @@ class EonNextAPI:
         """
 
         # Format dates as ISO strings with timezone (required by API)
+        # Ensure dates are UTC
+        if start_date.tzinfo is None:
+             start_date = start_date.replace(tzinfo=timezone.utc)
+        else:
+             start_date = start_date.astimezone(timezone.utc)
+             
+        if end_date.tzinfo is None:
+             end_date = end_date.replace(tzinfo=timezone.utc)
+        else:
+             end_date = end_date.astimezone(timezone.utc)
+             
         start_str = start_date.strftime("%Y-%m-%dT%H:%M:%S+00:00")
         end_str = end_date.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 

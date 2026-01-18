@@ -13,7 +13,8 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from eonapi.api import EonNextAPI
+from homeassistant.util import dt as dt_util
+from .eon_api import EonNextAPI
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                 
                 for meter in meters:
                     # Fetch consumption data
-                    end_date = datetime.now()
+                    end_date = dt_util.now()
                     start_date = end_date - timedelta(days=days_to_fetch)
                     
                     consumption = await self.api.get_consumption_data(
