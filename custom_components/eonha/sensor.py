@@ -10,6 +10,13 @@ from homeassistant.components.recorder.statistics import (
     async_import_statistics,
     statistics_during_period,
 )
+# New statistics API (HA 2025.11+): unit_class and mean_type; fall back for older HA
+try:
+    from homeassistant.components.recorder.models import StatisticMeanType
+    from homeassistant.const import UnitClass
+    _STATS_API_V2 = True
+except ImportError:
+    _STATS_API_V2 = False
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -223,16 +230,26 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
 
         if statistics:
             _LOGGER.debug(f"Importing {len(statistics)} statistics for {statistic_id}")
-            async_import_statistics(
-                self.hass,
-                StatisticMetaData(
+            # Build metadata: use unit_class/mean_type on HA 2025.11+ to avoid deprecation
+            if _STATS_API_V2:
+                metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
-                    name=f"{self._attr_name} History", # Give it a name
+                    name=f"{self._attr_name} History",
                     source=DOMAIN,
                     statistic_id=statistic_id,
                     unit_of_measurement=self.native_unit_of_measurement,
-                ),
-                statistics,
-            )
+                    unit_class=UnitClass.ENERGY,
+                    mean_type=StatisticMeanType.NONE,
+                )
+            else:
+                metadata = StatisticMetaData(
+                    has_mean=False,
+                    has_sum=True,
+                    name=f"{self._attr_name} History",
+                    source=DOMAIN,
+                    statistic_id=statistic_id,
+                    unit_of_measurement=self.native_unit_of_measurement,
+                )
+            async_import_statistics(self.hass, metadata, statistics)
 

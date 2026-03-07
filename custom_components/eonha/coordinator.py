@@ -224,7 +224,8 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                 "applicationId": self.glow_client.application,
                 "token": self.glow_client.token
             }
-            resp = self.glow_client.session.get(url, headers=headers, params=params)
+            # Sensible timeout to avoid blocking the executor (user rule: set timeout on tasks)
+            resp = self.glow_client.session.get(url, headers=headers, params=params, timeout=30)
             
             if resp.status_code != 200:
                 _LOGGER.warning(f"Glow API Error: {resp.status_code} {resp.text} | URL: {url} | Params: {params}")

@@ -9,9 +9,9 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from eonapi.api import EonNextAPI
 
 from .const import DOMAIN, CONF_BACKFILL_DAYS, CONF_TARGET_STATISTIC_ID, CONF_GLOW_USERNAME, CONF_GLOW_PASSWORD
+from .eon_api import EonNextAPI
 
 _LOGGER = logging.getLogger(__name__)
 
