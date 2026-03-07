@@ -61,11 +61,13 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
         self._meter_id = meter_data["info"]["id"]
         
         self._attr_name = f"E.ON Next {self._meter_type.capitalize()} ({self._serial})"
-        # Revert to old ID to preserve entity availability for users upgrading from v1.0
         self._attr_unique_id = f"eon_next_{self._serial}_{self._meter_type}_latest"
         self._attr_device_class = SensorDeviceClass.ENERGY
         self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+        # Process initial data so the sensor has a value immediately
+        self._process_consumption(meter_data)
     
     @property
     def icon(self) -> str | None:
@@ -74,39 +76,28 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
             return "mdi:fire"
         return "mdi:flash"
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        # Find the updated data for this meter
-        current_data = next(
-            (m for m in self.coordinator.data["meters"] if m["info"]["serial"] == self._serial), 
-            None
-        )
-        if not current_data or not current_data["consumption"]:
+    def _process_consumption(self, meter_data: dict) -> None:
+        """Calculate latest-day consumption from meter data and update attrs."""
+        consumption_list = meter_data.get("consumption") or []
+        if not consumption_list:
             return
 
-        self.meter_data = current_data
-        consumption_list = current_data["consumption"]
-        
-        # 1. Update State to be "Latest Available Day Consumption"
-        # Find the latest reading to determine the "latest day"
         latest_end = None
         for record in consumption_list:
-             end_dt = datetime.fromisoformat(record["endAt"])
-             if latest_end is None or end_dt > latest_end:
-                 latest_end = end_dt
-        
+            end_dt = datetime.fromisoformat(record["endAt"])
+            if latest_end is None or end_dt > latest_end:
+                latest_end = end_dt
+
         if not latest_end:
             return
 
-        # Use the day of the latest reading (local time)
-        latest_day_start = latest_end.astimezone(dt_util.DEFAULT_TIME_ZONE).replace(hour=0, minute=0, second=0, microsecond=0)
-        
+        latest_day_start = latest_end.astimezone(dt_util.DEFAULT_TIME_ZONE).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
         day_sum = 0.0
-        
         for record in consumption_list:
             start_dt = datetime.fromisoformat(record["startAt"])
-            # Check if this reading belongs to the latest day
             local_start = start_dt.astimezone(dt_util.DEFAULT_TIME_ZONE)
             if local_start >= latest_day_start:
                 day_sum += float(record["value"])
@@ -115,12 +106,26 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
         self._attr_extra_state_attributes = {
             "last_reading_time": latest_end.isoformat(),
             "latest_day_start": latest_day_start.isoformat(),
-            "meter_serial": self._serial
+            "meter_serial": self._serial,
         }
-        
-        # 2. Trigger Statistics Import (Background Task)
-        self.hass.async_create_task(self._async_import_historical_stats(consumption_list))
-        
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        current_data = next(
+            (m for m in self.coordinator.data["meters"] if m["info"]["serial"] == self._serial),
+            None,
+        )
+        if current_data:
+            self.meter_data = current_data
+            self._process_consumption(current_data)
+
+            consumption_list = current_data.get("consumption") or []
+            if consumption_list:
+                self.hass.async_create_task(
+                    self._async_import_historical_stats(consumption_list)
+                )
+
         super()._handle_coordinator_update()
 
     async def _async_import_historical_stats(self, consumption_list: list[dict]):
