@@ -57,6 +57,16 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         self.data = {"meters": []}
         self.known_meters = set()
 
+    def _merge_consumption(self, old: list[dict], new: list[dict]) -> list[dict]:
+        """Merge new consumption records into existing ones, deduplicating by startAt."""
+        seen = {}
+        for rec in old:
+            seen[rec["startAt"]] = rec
+        for rec in new:
+            seen[rec["startAt"]] = rec
+        merged = sorted(seen.values(), key=lambda x: x["startAt"])
+        return merged
+
     async def _async_update_data(self):
         """Fetch data from API endpoint."""
         try:
@@ -66,24 +76,30 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                 if not await self.api.login(self.username, self.password):
                     raise UpdateFailed("Failed to re-authenticate with E.ON Next")
 
-            # Discover accounts if we haven't or just to be safe (it's cheap)
             account_numbers = await self.api.get_account_numbers()
-            
+            _LOGGER.debug("Found %d E.ON accounts", len(account_numbers))
+
             all_meter_data = []
 
-            # Determine fetch window
-            # If we have no data yet, it's the first run: fetch backfill window.
-            # Otherwise, fetch shorter window (e.g. 7 days) to ensure we catch up on recent misses.
-            days_to_fetch = self.backfill_days if not self.data.get("meters") else 2
+            # E.ON data is typically delayed 3-5 days, so subsequent fetches
+            # need a wide enough window to catch delayed records.
+            is_first_run = not self.data.get("meters")
+            days_to_fetch = self.backfill_days if is_first_run else 10
+
+            # Build lookup of previous consumption data by meter serial
+            prev_consumption = {}
+            if not is_first_run:
+                for m in self.data.get("meters", []):
+                    prev_consumption[m["info"]["serial"]] = m.get("consumption", [])
 
             for account in account_numbers:
                 meters = await self.api.get_meters(account)
-                
+                _LOGGER.debug("Account %s: %d meters", account, len(meters))
+
                 for meter in meters:
-                    # Fetch consumption data
                     end_date = dt_util.now()
                     start_date = end_date - timedelta(days=days_to_fetch)
-                    
+
                     consumption = await self.api.get_consumption_data(
                         account,
                         meter['id'],
@@ -91,42 +107,43 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
                         start_date,
                         end_date
                     )
-                    
-                    # Sort by date
-                    if consumption:
+                    _LOGGER.debug(
+                        "Meter %s (%s): fetched %d records (last %d days)",
+                        meter['serial'], meter['type'],
+                        len(consumption) if consumption else 0, days_to_fetch,
+                    )
+
+                    # Merge with previously held data so we don't lose older records
+                    old = prev_consumption.get(meter["serial"], [])
+                    if old:
+                        consumption = self._merge_consumption(old, consumption or [])
+                    elif consumption:
                         consumption.sort(key=lambda x: x['startAt'])
 
                     # --- GLOWMARKT MERGE START ---
                     if (
-                        self.glow_username 
-                        and self.glow_password 
-                        and meter['type'] == 'electricity' 
+                        self.glow_username
+                        and self.glow_password
+                        and meter['type'] == 'electricity'
                         and Glow is not None
                     ):
                         try:
-                             # Determine where to start fetching Glow data from
-                             # If we have E.ON data, start from the last point. 
-                             # Else start from 2 days ago.
                              glow_start = datetime.now() - timedelta(days=2)
                              if consumption:
                                  last_eon = datetime.fromisoformat(consumption[-1]["startAt"])
-                                 # Add 30 mins to avoid overlap
                                  glow_start = last_eon + timedelta(minutes=30)
-                                 # Ensure timezone match (naive/aware comparison fix)
                                  if glow_start.tzinfo is None:
                                      glow_start = glow_start.replace(tzinfo=datetime.now().astimezone().tzinfo)
 
                              glow_data = await self.hass.async_add_executor_job(
                                  self._fetch_glow_data, glow_start
                              )
-                             
+
                              if glow_data:
-                                 _LOGGER.debug(f"Merged {len(glow_data)} records from Glowmarkt")
-                                 consumption.extend(glow_data)
-                                 # Re-sort just in case
-                                 consumption.sort(key=lambda x: x['startAt'])
+                                 _LOGGER.debug("Merged %d records from Glowmarkt", len(glow_data))
+                                 consumption = self._merge_consumption(consumption, glow_data)
                         except Exception as e:
-                            _LOGGER.warning(f"Failed to fetch Glowmarkt data: {e}")
+                            _LOGGER.warning("Failed to fetch Glowmarkt data: %s", e)
                     # --- GLOWMARKT MERGE END ---
 
                     meter_entry = {
@@ -138,8 +155,10 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
 
             return {"meters": all_meter_data}
 
+        except UpdateFailed:
+            raise
         except Exception as err:
-            raise UpdateFailed(f"Error communicating with API: {err}")
+            raise UpdateFailed(f"Error communicating with API: {err}") from err
 
     def _fetch_glow_data(self, start_time: datetime) -> list[dict]:
         """Fetch data from Glowmarkt (Sync method to be run in executor)."""
