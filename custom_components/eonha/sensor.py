@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -10,13 +10,15 @@ from homeassistant.components.recorder.statistics import (
     async_import_statistics,
     statistics_during_period,
 )
-# New statistics API (HA 2025.11+): unit_class and mean_type; fall back for older HA
+
 try:
     from homeassistant.components.recorder.models import StatisticMeanType
     from homeassistant.const import UnitClass
+
     _STATS_API_V2 = True
 except ImportError:
     _STATS_API_V2 = False
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -31,8 +33,39 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN
 from .coordinator import EonNextDataUpdateCoordinator
+from .energy_model import bucket_consumption_by_hour, summarize_consumption
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _build_statistic_id(serial: str, meter_type: str, kind: str) -> str:
+    """Build a stable statistic ID for imported long-term statistics."""
+    return f"sensor.{slugify(f'eon_next_{serial}_{meter_type}_{kind}')}"
+
+
+def _build_metadata(name: str, statistic_id: str) -> StatisticMetaData:
+    """Build statistics metadata compatible with old and new HA versions."""
+    if _STATS_API_V2:
+        return StatisticMetaData(
+            has_mean=False,
+            has_sum=True,
+            name=name,
+            source=DOMAIN,
+            statistic_id=statistic_id,
+            unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            unit_class=UnitClass.ENERGY,
+            mean_type=StatisticMeanType.NONE,
+        )
+
+    return StatisticMetaData(
+        has_mean=False,
+        has_sum=True,
+        name=name,
+        source=DOMAIN,
+        statistic_id=statistic_id,
+        unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    )
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -42,33 +75,32 @@ async def async_setup_entry(
     """Set up the E.ON Next sensors."""
     coordinator: EonNextDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = []
+    entities: list[SensorEntity] = []
     for meter_data in coordinator.data["meters"]:
-        entities.append(EonNextConsumptionSensor(coordinator, meter_data))
+        meter_type = meter_data["info"]["type"]
+        entities.append(EonNextLatestDaySensor(coordinator, meter_data))
+        entities.append(EonNextCumulativeSensor(coordinator, meter_data, "total"))
+
+        if meter_type == "electricity":
+            entities.append(EonNextCumulativeSensor(coordinator, meter_data, "peak"))
+            entities.append(EonNextCumulativeSensor(coordinator, meter_data, "offpeak"))
 
     async_add_entities(entities)
 
 
-class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
-    """Representation of an E.ON Next Consumption Sensor."""
+class EonNextBaseSensor(CoordinatorEntity, SensorEntity):
+    """Shared base for E.ON Next sensors."""
 
     def __init__(self, coordinator: EonNextDataUpdateCoordinator, meter_data: dict) -> None:
-        """Initialize the sensor."""
+        """Initialize the shared meter metadata."""
         super().__init__(coordinator)
         self.meter_data = meter_data
         self._serial = meter_data["info"]["serial"]
         self._meter_type = meter_data["info"]["type"]
         self._meter_id = meter_data["info"]["id"]
-        
-        self._attr_name = f"E.ON Next {self._meter_type.capitalize()} ({self._serial})"
-        self._attr_unique_id = f"eon_next_{self._serial}_{self._meter_type}_latest"
-        self._attr_device_class = SensorDeviceClass.ENERGY
-        self._attr_state_class = SensorStateClass.TOTAL
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_device_class = SensorDeviceClass.ENERGY
 
-        # Process initial data so the sensor has a value immediately
-        self._process_consumption(meter_data)
-    
     @property
     def icon(self) -> str | None:
         """Return the icon to use in the frontend."""
@@ -76,49 +108,52 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
             return "mdi:fire"
         return "mdi:flash"
 
-    def _process_consumption(self, meter_data: dict) -> None:
-        """Calculate latest-day consumption from meter data and update attrs."""
-        consumption_list = meter_data.get("consumption") or []
-        if not consumption_list:
-            return
-
-        latest_end = None
-        for record in consumption_list:
-            end_dt = datetime.fromisoformat(record["endAt"])
-            if latest_end is None or end_dt > latest_end:
-                latest_end = end_dt
-
-        if not latest_end:
-            return
-
-        latest_day_start = latest_end.astimezone(dt_util.DEFAULT_TIME_ZONE).replace(
-            hour=0, minute=0, second=0, microsecond=0
+    def _find_current_data(self) -> dict | None:
+        """Find the current coordinator payload for this meter."""
+        return next(
+            (
+                meter
+                for meter in self.coordinator.data["meters"]
+                if meter["info"]["serial"] == self._serial
+            ),
+            None,
         )
 
-        day_sum = 0.0
-        for record in consumption_list:
-            start_dt = datetime.fromisoformat(record["startAt"])
-            local_start = start_dt.astimezone(dt_util.DEFAULT_TIME_ZONE)
-            if local_start >= latest_day_start:
-                day_sum += float(record["value"])
 
-        self._attr_native_value = round(day_sum, 3)
+class EonNextLatestDaySensor(EonNextBaseSensor):
+    """Sensor showing the latest fully/partially available day total."""
+
+    def __init__(self, coordinator: EonNextDataUpdateCoordinator, meter_data: dict) -> None:
+        """Initialize the latest-day sensor."""
+        super().__init__(coordinator, meter_data)
+        self._attr_name = f"E.ON Next {self._meter_type.capitalize()} ({self._serial})"
+        self._attr_unique_id = f"eon_next_{self._serial}_{self._meter_type}_latest"
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._update_from_meter_data(meter_data)
+
+    def _update_from_meter_data(self, meter_data: dict) -> None:
+        """Calculate the latest-day total from the current consumption list."""
+        summary = summarize_consumption(
+            meter_data.get("consumption") or [],
+            dt_util.DEFAULT_TIME_ZONE,
+        )
+        if summary is None:
+            return
+
+        self._attr_native_value = round(summary["latest_day_kwh"], 3)
         self._attr_extra_state_attributes = {
-            "last_reading_time": latest_end.isoformat(),
-            "latest_day_start": latest_day_start.isoformat(),
+            "last_reading_time": summary["latest_end"].isoformat(),
+            "latest_day_start": summary["latest_day_start"].isoformat(),
             "meter_serial": self._serial,
         }
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        current_data = next(
-            (m for m in self.coordinator.data["meters"] if m["info"]["serial"] == self._serial),
-            None,
-        )
+        """Refresh state from coordinator data and schedule backfill imports."""
+        current_data = self._find_current_data()
         if current_data:
             self.meter_data = current_data
-            self._process_consumption(current_data)
+            self._update_from_meter_data(current_data)
 
             consumption_list = current_data.get("consumption") or []
             if consumption_list:
@@ -128,133 +163,175 @@ class EonNextConsumptionSensor(CoordinatorEntity, SensorEntity):
 
         super()._handle_coordinator_update()
 
-    async def _async_import_historical_stats(self, consumption_list: list[dict]):
-        """Import historical statistics."""
-        if not consumption_list:
-            return
-            
-        # Use target statistic ID if configured, otherwise use stable default
-        if self.coordinator.target_statistic_id:
-            statistic_id = self.coordinator.target_statistic_id
-        else:
-            # Format: sensor.eon_next_{serial}_{type}_history
-            stat_id_base = f"eon_next_{self._serial}_{self._meter_type}_history"
-            statistic_id = f"sensor.{slugify(stat_id_base)}"
-
-        # 1. Aggregate half-hourly data to hourly
-        hourly_data = {}
-        
-        for record in consumption_list:
-            start_dt = datetime.fromisoformat(record["startAt"])
-            # Ensure timezone awareness. Assuming API returns ISO with offset.
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
-            
-            # Round down to start of hour
-            hour_start = start_dt.replace(minute=0, second=0, microsecond=0)
-            
-            val = float(record["value"])
-            
-            if hour_start not in hourly_data:
-                hourly_data[hour_start] = 0.0
-            hourly_data[hour_start] += val
-
-        if not hourly_data:
+    async def _async_import_stat_series(
+        self,
+        statistic_id: str,
+        statistic_name: str,
+        hourly_rows: list[dict],
+        field_name: str,
+    ) -> None:
+        """Import a cumulative hourly statistic series."""
+        if not hourly_rows:
             return
 
-        sorted_hours = sorted(hourly_data.keys())
-        # We need to find the previous sum to continue the chain
-        # Query the last statistic
-        last_stats = await get_instance(self.hass).async_add_executor_job(
+        sorted_hours = [row["start"] for row in hourly_rows]
+        stats_manager = get_instance(self.hass)
+
+        last_stats = await stats_manager.async_add_executor_job(
             statistics_during_period,
             self.hass,
-            sorted_hours[0] - timedelta(days=365), # Look back far enough
+            sorted_hours[0] - timedelta(days=365),
             sorted_hours[0],
             {statistic_id},
             "hour",
             None,
-            {"sum"}
+            {"sum"},
         )
-        
+
         running_sum = 0.0
         if statistic_id in last_stats and last_stats[statistic_id]:
-             # Get the very last entry
-             last_entry = last_stats[statistic_id][-1]
-             if "sum" in last_entry:
-                 running_sum = last_entry["sum"]
-        
-        _LOGGER.debug(f"Starting stats import for {statistic_id} with running_sum={running_sum}")
+            last_entry = last_stats[statistic_id][-1]
+            running_sum = float(last_entry.get("sum", 0.0))
 
-        # 2. Check for existing OUTSIDE the gap? 
-        # Actually checking existing statistics for the period we want to insert is good to avoid overwriting or duplicates
-        # But for 'sum', we just need to ensure we insert correct cumulative values.
-        # If we overwrite existing, we better match.
-        # Simplification: Only import hours that don't exist in specific period.
-        
-        start_time_q = sorted_hours[0]
-        end_time_q = sorted_hours[-1] + timedelta(hours=1)
-
-        existing_in_period = await get_instance(self.hass).async_add_executor_job(
+        existing_in_period = await stats_manager.async_add_executor_job(
             statistics_during_period,
             self.hass,
-            start_time_q,
-            end_time_q,
+            sorted_hours[0],
+            sorted_hours[-1] + timedelta(hours=1),
             {statistic_id},
             "hour",
             None,
-            {"sum"}
+            {"sum"},
         )
-        
-        existing_hours = set()
-        if statistic_id in existing_in_period:
-             for stat in existing_in_period[statistic_id]:
-                 if "start" in stat:
-                     dt = datetime.fromtimestamp(stat["start"], tz=timezone.utc)
-                     existing_hours.add(dt)
 
-        statistics = []
-        for hour_start in sorted_hours:
-            val = hourly_data[hour_start]
-            running_sum += val # Always increment running sum to track "virtual" total
-            
+        existing_hours: set[datetime] = set()
+        if statistic_id in existing_in_period:
+            for stat in existing_in_period[statistic_id]:
+                if "start" in stat:
+                    existing_hours.add(
+                        datetime.fromtimestamp(stat["start"], tz=timezone.utc)
+                    )
+
+        statistics: list[StatisticData] = []
+        for row in hourly_rows:
+            hour_start = row["start"]
+            running_sum += float(row[field_name])
+
             if hour_start in existing_hours:
-                # If it already exists, we skip writing it, BUT we must assume the existing one 
-                # matches our calculated running_sum if the history is consistent.
-                # If there's a gap or mismatch, this naive approach might drift.
-                # Ideally we'd read the existing sum and use that as the base for next.
-                # But for now, let's just skip writing.
                 continue
 
             statistics.append(
                 StatisticData(
                     start=hour_start,
-                    state=running_sum, 
-                    sum=running_sum
+                    state=running_sum,
+                    sum=running_sum,
                 )
             )
 
-        if statistics:
-            _LOGGER.debug(f"Importing {len(statistics)} statistics for {statistic_id}")
-            # Build metadata: use unit_class/mean_type on HA 2025.11+ to avoid deprecation
-            if _STATS_API_V2:
-                metadata = StatisticMetaData(
-                    has_mean=False,
-                    has_sum=True,
-                    name=f"{self._attr_name} History",
-                    source=DOMAIN,
-                    statistic_id=statistic_id,
-                    unit_of_measurement=self.native_unit_of_measurement,
-                    unit_class=UnitClass.ENERGY,
-                    mean_type=StatisticMeanType.NONE,
-                )
-            else:
-                metadata = StatisticMetaData(
-                    has_mean=False,
-                    has_sum=True,
-                    name=f"{self._attr_name} History",
-                    source=DOMAIN,
-                    statistic_id=statistic_id,
-                    unit_of_measurement=self.native_unit_of_measurement,
-                )
-            async_import_statistics(self.hass, metadata, statistics)
+        if not statistics:
+            return
+
+        _LOGGER.debug(
+            "Importing %d %s statistics for %s",
+            len(statistics),
+            field_name,
+            statistic_id,
+        )
+        async_import_statistics(
+            self.hass,
+            _build_metadata(statistic_name, statistic_id),
+            statistics,
+        )
+
+    async def _async_import_historical_stats(self, consumption_list: list[dict]) -> None:
+        """Import long-term statistics for total and tariff-aware energy usage."""
+        hourly_rows = bucket_consumption_by_hour(consumption_list, dt_util.DEFAULT_TIME_ZONE)
+        if not hourly_rows:
+            return
+
+        total_stat_id = _build_statistic_id(self._serial, self._meter_type, "total")
+        total_stat_ids = {total_stat_id}
+        if self.coordinator.target_statistic_id:
+            total_stat_ids.add(self.coordinator.target_statistic_id)
+
+        for statistic_id in total_stat_ids:
+            await self._async_import_stat_series(
+                statistic_id,
+                f"E.ON Next {self._meter_type.capitalize()} Total ({self._serial})",
+                hourly_rows,
+                "total",
+            )
+
+        if self._meter_type != "electricity":
+            return
+
+        await self._async_import_stat_series(
+            _build_statistic_id(self._serial, self._meter_type, "peak"),
+            f"E.ON Next Electricity Peak ({self._serial})",
+            hourly_rows,
+            "peak",
+        )
+        await self._async_import_stat_series(
+            _build_statistic_id(self._serial, self._meter_type, "offpeak"),
+            f"E.ON Next Electricity Off Peak ({self._serial})",
+            hourly_rows,
+            "offpeak",
+        )
+
+
+class EonNextCumulativeSensor(EonNextBaseSensor):
+    """Cumulative total/peak/off-peak sensors for Energy dashboard usage."""
+
+    def __init__(
+        self,
+        coordinator: EonNextDataUpdateCoordinator,
+        meter_data: dict,
+        kind: str,
+    ) -> None:
+        """Initialize a cumulative sensor."""
+        super().__init__(coordinator, meter_data)
+        self._kind = kind
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+        kind_name = {
+            "total": "Total",
+            "peak": "Peak",
+            "offpeak": "Off Peak",
+        }[kind]
+
+        self._attr_name = f"E.ON Next {self._meter_type.capitalize()} {kind_name} ({self._serial})"
+        self._attr_unique_id = f"eon_next_{self._serial}_{self._meter_type}_{kind}"
+        self._update_from_meter_data(meter_data)
+
+    def _update_from_meter_data(self, meter_data: dict) -> None:
+        """Set the cumulative state value for the current tariff bucket."""
+        summary = summarize_consumption(
+            meter_data.get("consumption") or [],
+            dt_util.DEFAULT_TIME_ZONE,
+        )
+        if summary is None:
+            return
+
+        key = {
+            "total": "total_kwh",
+            "peak": "peak_kwh",
+            "offpeak": "offpeak_kwh",
+        }[self._kind]
+
+        self._attr_native_value = round(summary[key], 3)
+        self._attr_extra_state_attributes = {
+            "last_reading_time": summary["latest_end"].isoformat(),
+            "meter_serial": self._serial,
+            "tariff_bucket": self._kind,
+        }
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh state from coordinator data."""
+        current_data = self._find_current_data()
+        if current_data:
+            self.meter_data = current_data
+            self._update_from_meter_data(current_data)
+
+        super()._handle_coordinator_update()
 
