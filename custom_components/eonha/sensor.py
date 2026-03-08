@@ -44,6 +44,11 @@ def _build_statistic_id(serial: str, meter_type: str, kind: str) -> str:
     return f"sensor.{slugify(f'eon_next_{serial}_{meter_type}_{kind}')}"
 
 
+def _build_history_statistic_id(serial: str, meter_type: str, kind: str) -> str:
+    """Build a stable external-history statistic ID for Energy dashboard backfill."""
+    return f"sensor.{slugify(f'eon_next_{serial}_{meter_type}_{kind}_history')}"
+
+
 def _build_metadata(name: str, statistic_id: str, source: str) -> StatisticMetaData:
     """Build statistics metadata compatible with old and new HA versions."""
     if _STATS_API_V2:
@@ -267,6 +272,14 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
                 recorder_backed=self.hass.states.get(statistic_id) is not None,
             )
 
+        await self._async_import_stat_series(
+            _build_history_statistic_id(self._serial, self._meter_type, "total"),
+            f"E.ON Next {self._meter_type.capitalize()} Total History ({self._serial})",
+            hourly_rows,
+            "total",
+            recorder_backed=False,
+        )
+
         if self._meter_type != "electricity":
             return
 
@@ -278,11 +291,25 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
             recorder_backed=True,
         )
         await self._async_import_stat_series(
+            _build_history_statistic_id(self._serial, self._meter_type, "peak"),
+            f"E.ON Next Electricity Peak History ({self._serial})",
+            hourly_rows,
+            "peak",
+            recorder_backed=False,
+        )
+        await self._async_import_stat_series(
             _build_statistic_id(self._serial, self._meter_type, "offpeak"),
             f"E.ON Next Electricity Off Peak ({self._serial})",
             hourly_rows,
             "offpeak",
             recorder_backed=True,
+        )
+        await self._async_import_stat_series(
+            _build_history_statistic_id(self._serial, self._meter_type, "offpeak"),
+            f"E.ON Next Electricity Off Peak History ({self._serial})",
+            hourly_rows,
+            "offpeak",
+            recorder_backed=False,
         )
 
 
