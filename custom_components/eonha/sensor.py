@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
     async_import_statistics,
     statistics_during_period,
 )
@@ -43,14 +44,14 @@ def _build_statistic_id(serial: str, meter_type: str, kind: str) -> str:
     return f"sensor.{slugify(f'eon_next_{serial}_{meter_type}_{kind}')}"
 
 
-def _build_metadata(name: str, statistic_id: str) -> StatisticMetaData:
+def _build_metadata(name: str, statistic_id: str, source: str) -> StatisticMetaData:
     """Build statistics metadata compatible with old and new HA versions."""
     if _STATS_API_V2:
         return StatisticMetaData(
             has_mean=False,
             has_sum=True,
             name=name,
-            source=DOMAIN,
+            source=source,
             statistic_id=statistic_id,
             unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
             unit_class=UnitClass.ENERGY,
@@ -61,7 +62,7 @@ def _build_metadata(name: str, statistic_id: str) -> StatisticMetaData:
         has_mean=False,
         has_sum=True,
         name=name,
-        source=DOMAIN,
+        source=source,
         statistic_id=statistic_id,
         unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
     )
@@ -169,6 +170,7 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
         statistic_name: str,
         hourly_rows: list[dict],
         field_name: str,
+        recorder_backed: bool,
     ) -> None:
         """Import a cumulative hourly statistic series."""
         if not hourly_rows:
@@ -237,11 +239,13 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
             field_name,
             statistic_id,
         )
-        async_import_statistics(
-            self.hass,
-            _build_metadata(statistic_name, statistic_id),
-            statistics,
-        )
+
+        source = "recorder" if recorder_backed else DOMAIN
+        metadata = _build_metadata(statistic_name, statistic_id, source)
+        if recorder_backed:
+            async_import_statistics(self.hass, metadata, statistics)
+        else:
+            async_add_external_statistics(self.hass, metadata, statistics)
 
     async def _async_import_historical_stats(self, consumption_list: list[dict]) -> None:
         """Import long-term statistics for total and tariff-aware energy usage."""
@@ -260,6 +264,7 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
                 f"E.ON Next {self._meter_type.capitalize()} Total ({self._serial})",
                 hourly_rows,
                 "total",
+                recorder_backed=self.hass.states.get(statistic_id) is not None,
             )
 
         if self._meter_type != "electricity":
@@ -270,12 +275,14 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
             f"E.ON Next Electricity Peak ({self._serial})",
             hourly_rows,
             "peak",
+            recorder_backed=True,
         )
         await self._async_import_stat_series(
             _build_statistic_id(self._serial, self._meter_type, "offpeak"),
             f"E.ON Next Electricity Off Peak ({self._serial})",
             hourly_rows,
             "offpeak",
+            recorder_backed=True,
         )
 
 
