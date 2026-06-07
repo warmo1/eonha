@@ -34,7 +34,13 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN
 from .coordinator import EonNextDataUpdateCoordinator
-from .energy_model import bucket_consumption_by_hour, summarize_consumption
+from .energy_model import (
+    GAS_RATE_GBP_PER_KWH,
+    OFFPEAK_RATE_GBP_PER_KWH,
+    PEAK_RATE_GBP_PER_KWH,
+    bucket_consumption_by_hour,
+    summarize_consumption,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,8 +55,15 @@ def _build_statistic_id(serial: str, meter_type: str, kind: str) -> str:
     return f"{DOMAIN}:{slugify(f'eon_next_{serial}_{meter_type}_{kind}')}"
 
 
-def _build_metadata(name: str, statistic_id: str, source: str) -> StatisticMetaData:
+def _build_metadata(
+    name: str,
+    statistic_id: str,
+    source: str,
+    monetary: bool = False,
+) -> StatisticMetaData:
     """Build statistics metadata compatible with old and new HA versions."""
+    unit = "GBP" if monetary else UnitOfEnergy.KILO_WATT_HOUR
+
     if _STATS_API_V2:
         return StatisticMetaData(
             has_mean=False,
@@ -58,8 +71,8 @@ def _build_metadata(name: str, statistic_id: str, source: str) -> StatisticMetaD
             name=name,
             source=source,
             statistic_id=statistic_id,
-            unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-            unit_class=UnitClass.ENERGY,
+            unit_of_measurement=unit,
+            unit_class=None if monetary else UnitClass.ENERGY,
             mean_type=StatisticMeanType.NONE,
         )
 
@@ -69,7 +82,7 @@ def _build_metadata(name: str, statistic_id: str, source: str) -> StatisticMetaD
         name=name,
         source=source,
         statistic_id=statistic_id,
-        unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        unit_of_measurement=unit,
     )
 
 
@@ -193,6 +206,7 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
         statistic_name: str,
         hourly_rows: list[dict],
         field_name: str,
+        monetary: bool = False,
     ) -> None:
         """Import a cumulative hourly statistic series.
 
@@ -292,7 +306,7 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
             statistic_id,
         )
 
-        metadata = _build_metadata(statistic_name, statistic_id, source)
+        metadata = _build_metadata(statistic_name, statistic_id, source, monetary)
         if is_external:
             async_add_external_statistics(self.hass, metadata, statistics)
         else:
@@ -332,6 +346,17 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
                     )
 
             if self._meter_type != "electricity":
+                # Gas cost statistics if a unit rate is configured.
+                if GAS_RATE_GBP_PER_KWH:
+                    for row in hourly_rows:
+                        row["total_cost"] = row["total"] * GAS_RATE_GBP_PER_KWH
+                    await self._async_import_stat_series(
+                        _build_statistic_id(self._serial, self._meter_type, "total_cost"),
+                        f"E.ON Next Gas Cost ({self._serial})",
+                        hourly_rows,
+                        "total_cost",
+                        monetary=True,
+                    )
                 return
 
             await self._async_import_stat_series(
@@ -346,6 +371,27 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
                 hourly_rows,
                 "offpeak",
             )
+
+            # Cost statistics: HA cannot apply a static price to external
+            # statistics (core#108551), so import GBP cost series the
+            # dashboard can use via "Use an entity tracking the total costs".
+            for row in hourly_rows:
+                row["peak_cost"] = row["peak"] * PEAK_RATE_GBP_PER_KWH
+                row["offpeak_cost"] = row["offpeak"] * OFFPEAK_RATE_GBP_PER_KWH
+                row["total_cost"] = row["peak_cost"] + row["offpeak_cost"]
+
+            for kind, label in (
+                ("peak_cost", "Peak Cost"),
+                ("offpeak_cost", "Off Peak Cost"),
+                ("total_cost", "Total Cost"),
+            ):
+                await self._async_import_stat_series(
+                    _build_statistic_id(self._serial, self._meter_type, kind),
+                    f"E.ON Next Electricity {label} ({self._serial})",
+                    hourly_rows,
+                    kind,
+                    monetary=True,
+                )
         except Exception:
             _LOGGER.exception(
                 "Failed to import E.ON Next statistics for meter %s", self._serial

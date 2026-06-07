@@ -5,8 +5,22 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 
+# E.ON Next Drive off-peak window (local time).
+# Tariff: 2.9p/kWh 00:00-06:00, 25p/kWh otherwise.
+# If E.ON change the window, update OFFPEAK_END here and in
+# tests/test_energy_model.py - the split is recalculated for the whole
+# fetch window on the next import.
 OFFPEAK_START = time(hour=0, minute=0)
 OFFPEAK_END = time(hour=6, minute=0)
+
+# Unit rates (GBP/kWh) used to build cost statistics for the Energy
+# dashboard. HA core cannot apply a static price to external statistics
+# (see home-assistant/core#108551), so the integration imports its own
+# cost series instead.
+PEAK_RATE_GBP_PER_KWH = 0.25
+OFFPEAK_RATE_GBP_PER_KWH = 0.029
+# Set to your gas unit rate (e.g. 0.062) to get gas cost statistics.
+GAS_RATE_GBP_PER_KWH: float | None = None
 
 
 def _parse_record_start(record: dict[str, Any]) -> datetime:
