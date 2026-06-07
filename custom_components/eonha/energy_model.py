@@ -6,7 +6,7 @@ from typing import Any
 
 
 OFFPEAK_START = time(hour=0, minute=0)
-OFFPEAK_END = time(hour=7, minute=0)
+OFFPEAK_END = time(hour=6, minute=0)
 
 
 def _parse_record_start(record: dict[str, Any]) -> datetime:
@@ -31,6 +31,7 @@ def summarize_consumption(
     if not consumption_list:
         return None
 
+    earliest_start = None
     latest_end = None
     total_kwh = 0.0
     peak_kwh = 0.0
@@ -43,6 +44,8 @@ def summarize_consumption(
             end_dt = end_dt.replace(tzinfo=timezone.utc)
         end_dt = end_dt.astimezone(timezone.utc)
 
+        if earliest_start is None or start_dt_utc < earliest_start:
+            earliest_start = start_dt_utc
         if latest_end is None or end_dt > latest_end:
             latest_end = end_dt
 
@@ -71,6 +74,7 @@ def summarize_consumption(
             latest_day_kwh += float(record["value"])
 
     return {
+        "earliest_start": earliest_start,
         "latest_end": latest_end,
         "latest_day_start": latest_day_start,
         "latest_day_kwh": latest_day_kwh,

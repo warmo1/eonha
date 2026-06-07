@@ -27,9 +27,10 @@ LONDON = ZoneInfo("Europe/London")
 
 
 def test_is_offpeak_respects_boundary() -> None:
-    """00:00-06:59 is off-peak and 07:00 is peak."""
+    """00:00-05:59 is off-peak and 06:00 is peak (E.ON Next Drive)."""
     assert is_offpeak(datetime(2026, 3, 8, 0, 0, tzinfo=LONDON)) is True
-    assert is_offpeak(datetime(2026, 3, 8, 6, 59, tzinfo=LONDON)) is True
+    assert is_offpeak(datetime(2026, 3, 8, 5, 59, tzinfo=LONDON)) is True
+    assert is_offpeak(datetime(2026, 3, 8, 6, 0, tzinfo=LONDON)) is False
     assert is_offpeak(datetime(2026, 3, 8, 7, 0, tzinfo=LONDON)) is False
 
 
@@ -38,23 +39,23 @@ def test_bucket_consumption_by_hour_splits_peak_and_offpeak() -> None:
     rows = bucket_consumption_by_hour(
         [
             {
+                "startAt": "2026-03-08T05:00:00+00:00",
+                "endAt": "2026-03-08T05:30:00+00:00",
+                "value": "1.0",
+            },
+            {
+                "startAt": "2026-03-08T05:30:00+00:00",
+                "endAt": "2026-03-08T06:00:00+00:00",
+                "value": "2.0",
+            },
+            {
                 "startAt": "2026-03-08T06:00:00+00:00",
                 "endAt": "2026-03-08T06:30:00+00:00",
-                "value": "1.0",
+                "value": "3.0",
             },
             {
                 "startAt": "2026-03-08T06:30:00+00:00",
                 "endAt": "2026-03-08T07:00:00+00:00",
-                "value": "2.0",
-            },
-            {
-                "startAt": "2026-03-08T07:00:00+00:00",
-                "endAt": "2026-03-08T07:30:00+00:00",
-                "value": "3.0",
-            },
-            {
-                "startAt": "2026-03-08T07:30:00+00:00",
-                "endAt": "2026-03-08T08:00:00+00:00",
                 "value": "4.0",
             },
         ],
@@ -85,8 +86,8 @@ def test_summarize_consumption_returns_latest_day_and_totals() -> None:
                 "value": "2.0",
             },
             {
-                "startAt": "2026-03-08T07:00:00+00:00",
-                "endAt": "2026-03-08T07:30:00+00:00",
+                "startAt": "2026-03-08T06:00:00+00:00",
+                "endAt": "2026-03-08T06:30:00+00:00",
                 "value": "3.0",
             },
         ],
@@ -98,3 +99,4 @@ def test_summarize_consumption_returns_latest_day_and_totals() -> None:
     assert round(summary["offpeak_kwh"], 3) == 2.0
     assert round(summary["peak_kwh"], 3) == 4.5
     assert round(summary["latest_day_kwh"], 3) == 5.0
+    assert summary["earliest_start"].isoformat() == "2026-03-07T23:30:00+00:00"
