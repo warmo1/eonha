@@ -253,7 +253,6 @@ class EonNextAPI:
              end_date = end_date.astimezone(timezone.utc)
              
         start_str = start_date.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        end_str = end_date.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
         if meter_type == "electricity":
             query = """
@@ -394,11 +393,31 @@ class EonNextAPI:
                             if not node:
                                 continue
 
-                            # Filter by end date if we have interval data
+                            # Filter by end date if we have interval data.
+                            # The API returns startAt in Europe/London wall
+                            # clock (e.g. +01:00 during BST), so a string
+                            # compare against a UTC end string is off by the
+                            # offset. Parse to aware datetimes and compare
+                            # those instead.
                             interval_start = node.get("startAt", "")
                             if interval_start:
+                                try:
+                                    interval_start_dt = datetime.fromisoformat(
+                                        interval_start
+                                    )
+                                except ValueError:
+                                    # Unexpected format; keep the record
+                                    # rather than silently dropping data.
+                                    consumption_data.append(node)
+                                    continue
+
+                                if interval_start_dt.tzinfo is None:
+                                    interval_start_dt = interval_start_dt.replace(
+                                        tzinfo=timezone.utc
+                                    )
+
                                 # Only include data up to the end date
-                                if interval_start <= end_str:
+                                if interval_start_dt <= end_date:
                                     consumption_data.append(node)
                                 else:
                                     # Past the end date, stop pagination

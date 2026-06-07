@@ -6,6 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.httpx_client import get_async_client
 
 from .eon_api import EonNextAPI
@@ -22,41 +23,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Use HA's shared httpx client to avoid blocking SSL context loading
     api = EonNextAPI(client=get_async_client(hass))
+
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
+
+    # Prefer options over data (config)
+    backfill_days = entry.options.get(CONF_BACKFILL_DAYS, entry.data.get(CONF_BACKFILL_DAYS, 90))
+    target_statistic_id = entry.options.get(CONF_TARGET_STATISTIC_ID, entry.data.get(CONF_TARGET_STATISTIC_ID))
+    glow_username = entry.options.get(CONF_GLOW_USERNAME, entry.data.get(CONF_GLOW_USERNAME))
+    glow_password = entry.options.get(CONF_GLOW_PASSWORD, entry.data.get(CONF_GLOW_PASSWORD))
+
+    # Initial login. Treat any failure here as "not ready" so HA retries
+    # with backoff instead of permanently failing the entry on a transient
+    # API outage or slow boot.
     try:
-        username = entry.data[CONF_USERNAME]
-        password = entry.data[CONF_PASSWORD]
-        
-        # Prefer options over data (config)
-        backfill_days = entry.options.get(CONF_BACKFILL_DAYS, entry.data.get(CONF_BACKFILL_DAYS, 90))
-        target_statistic_id = entry.options.get(CONF_TARGET_STATISTIC_ID, entry.data.get(CONF_TARGET_STATISTIC_ID))
-        glow_username = entry.options.get(CONF_GLOW_USERNAME, entry.data.get(CONF_GLOW_USERNAME))
-        glow_password = entry.options.get(CONF_GLOW_PASSWORD, entry.data.get(CONF_GLOW_PASSWORD))
-        
-        # Initial login
-        if not await api.login(username, password):
-             _LOGGER.error("Failed to login to E.ON Next API")
-             return False
-        
-        coordinator = EonNextDataUpdateCoordinator(
-            hass,
-            entry,
-            api, 
-            username, 
-            password, 
-            backfill_days, 
-            target_statistic_id,
-            glow_username,
-            glow_password
-        )
-        
-        # Fetch initial data so we have something when entities are created
-        await coordinator.async_config_entry_first_refresh()
+        logged_in = await api.login(username, password)
+    except Exception as err:
+        raise ConfigEntryNotReady(
+            f"Error connecting to E.ON Next API: {err}"
+        ) from err
 
-        hass.data[DOMAIN][entry.entry_id] = coordinator
+    if not logged_in:
+        raise ConfigEntryNotReady("Failed to login to E.ON Next API")
 
-    except Exception as e:
-        _LOGGER.error("Error setting up E.ON Next integration: %s", e)
-        return False
+    coordinator = EonNextDataUpdateCoordinator(
+        hass,
+        entry,
+        api,
+        username,
+        password,
+        backfill_days,
+        target_statistic_id,
+        glow_username,
+        glow_password
+    )
+
+    # Fetch initial data so we have something when entities are created.
+    # Raises ConfigEntryNotReady itself on UpdateFailed, triggering retries.
+    await coordinator.async_config_entry_first_refresh()
+
+    hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
