@@ -229,8 +229,10 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
             running_sum = float(last_stats[statistic_id][-1].get("sum") or 0.0)
 
         statistics: list[StatisticData] = []
+        sums_by_hour: dict[float, float] = {}
         for row in hourly_rows:
             running_sum += float(row[field_name])
+            sums_by_hour[row["start"].timestamp()] = running_sum
             statistics.append(
                 StatisticData(
                     start=row["start"],
@@ -238,6 +240,50 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
                     sum=running_sum,
                 )
             )
+
+        # Consistency check (external statistics only): if the database
+        # already holds rows whose sums disagree with what we are about to
+        # write, or rows beyond our newest data, the cumulative series
+        # would go backwards and the Energy dashboard would show negative
+        # usage. This happens after tariff-window changes, code changes,
+        # or when the fetched window shrinks across a restart. In that
+        # case wipe the statistic and rebuild it cleanly from zero.
+        if is_external:
+            existing = await stats_manager.async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                first_start,
+                None,
+                {statistic_id},
+                "hour",
+                None,
+                {"sum"},
+            )
+            needs_rebuild = False
+            for db_row in existing.get(statistic_id, []):
+                db_sum = float(db_row.get("sum") or 0.0)
+                ours = sums_by_hour.get(db_row["start"])
+                if ours is None or abs(ours - db_sum) > 0.01:
+                    needs_rebuild = True
+                    break
+
+            if needs_rebuild:
+                _LOGGER.warning(
+                    "Inconsistent statistics for %s; clearing and rebuilding",
+                    statistic_id,
+                )
+                stats_manager.async_clear_statistics([statistic_id])
+                running_sum = 0.0
+                statistics = []
+                for row in hourly_rows:
+                    running_sum += float(row[field_name])
+                    statistics.append(
+                        StatisticData(
+                            start=row["start"],
+                            state=running_sum,
+                            sum=running_sum,
+                        )
+                    )
 
         _LOGGER.debug(
             "Importing %d %s statistics for %s",

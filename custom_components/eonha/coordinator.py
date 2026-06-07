@@ -57,14 +57,28 @@ class EonNextDataUpdateCoordinator(DataUpdateCoordinator):
         self.data = {"meters": []}
         self.known_meters = set()
 
+    @staticmethod
+    def _record_key(rec: dict) -> float | str:
+        """Normalize a record's startAt to an epoch key.
+
+        E.ON returns local-offset timestamps (e.g. +01:00 in BST) while
+        Glowmarkt returns UTC (+00:00). Deduplicating on the raw string
+        kept BOTH representations of the same half hour and double-counted
+        that energy, so dedupe on the actual instant instead.
+        """
+        try:
+            return datetime.fromisoformat(rec["startAt"]).timestamp()
+        except (ValueError, KeyError):
+            return rec.get("startAt", "")
+
     def _merge_consumption(self, old: list[dict], new: list[dict]) -> list[dict]:
-        """Merge new consumption records into existing ones, deduplicating by startAt."""
+        """Merge new consumption records into existing ones, deduplicating by instant."""
         seen = {}
         for rec in old:
-            seen[rec["startAt"]] = rec
+            seen[self._record_key(rec)] = rec
         for rec in new:
-            seen[rec["startAt"]] = rec
-        merged = sorted(seen.values(), key=lambda x: x["startAt"])
+            seen[self._record_key(rec)] = rec
+        merged = sorted(seen.values(), key=self._record_key)
         return merged
 
     async def _async_update_data(self):
