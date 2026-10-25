@@ -1,5 +1,7 @@
 """Eon Next API client."""
 
+import re
+
 import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -8,7 +10,16 @@ from typing import Optional
 class EonNextAPI:
     """Client for interacting with the Eon Next API."""
 
-    def __init__(self, client: Optional[httpx.AsyncClient] = None):
+    def __init__(
+        self,
+        client: Optional[httpx.AsyncClient] = None,
+        api_key: Optional[str] = None,
+    ):
+        # E.ON Next moved customer sign-in to Auth0 (Oct 2026). Kraken's
+        # obtainKrakenToken no longer accepts email/password, only
+        # APIKey / refreshToken / preSignedKey. When an API key is set,
+        # login() uses it and ignores username/password.
+        self.api_key = (api_key or "").strip() or None
         self.base_url = "https://api.eonnext-kraken.energy/v1/graphql/"
         self.auth_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -83,10 +94,10 @@ class EonNextAPI:
 
         return response_data
 
-    async def login(self, username: str, password: str) -> bool:
-        """Authenticate with username and password."""
+    async def login(self, username: str | None = None, password: str | None = None) -> bool:
+        """Authenticate with an API key (preferred) or legacy email/password."""
         query = """
-        mutation loginEmailAuthentication($input: ObtainJSONWebTokenInput!) {
+        mutation obtainKrakenToken($input: ObtainJSONWebTokenInput!) {
             obtainKrakenToken(input: $input) {
                 payload
                 refreshExpiresIn
@@ -97,25 +108,53 @@ class EonNextAPI:
         }
         """
 
+        if self.api_key:
+            variables = {"input": {"APIKey": self.api_key}}
+        elif username and password:
+            # Legacy path - rejected by E.ON since the Auth0 migration.
+            variables = {"input": {"email": username, "password": password}}
+        else:
+            raise Exception("No E.ON Next API key configured")
+
         try:
             result = await self._graphql_request(
-                "loginEmailAuthentication",
-                query,
-                {"input": {"email": username, "password": password}},
-                authenticated=False
+                "obtainKrakenToken", query, variables, authenticated=False
             )
-
-            if "data" in result and "obtainKrakenToken" in result["data"]:
-                token_data = result["data"]["obtainKrakenToken"]
-                self.auth_token = token_data["token"]
-                self.refresh_token = token_data["refreshToken"]
-                self.token_expires = token_data["payload"]["exp"]
-                self.refresh_expires = token_data["refreshExpiresIn"]
-                return True
-
-            return False
         except Exception as e:
-            raise Exception(f"Login failed: {str(e)}")
+            msg = self._sanitize(str(e))
+            if not self.api_key and "ObtainJSONWebTokenInput" in msg:
+                msg = (
+                    "E.ON Next no longer supports email/password login. "
+                    "Add your sk_live_ API key in the integration options."
+                )
+            raise Exception(f"Login failed: {msg}") from None
+
+        token_data = (result.get("data") or {}).get("obtainKrakenToken")
+        if not token_data:
+            errors = result.get("errors") or [{}]
+            msg = self._sanitize(str(errors[0].get("message", "unknown error")))
+            if not self.api_key and "ObtainJSONWebTokenInput" in msg:
+                msg = (
+                    "E.ON Next no longer supports email/password login. "
+                    "Add your sk_live_ API key in the integration options."
+                )
+            raise Exception(f"Login failed: {msg}")
+
+        self.auth_token = token_data["token"]
+        self.refresh_token = token_data["refreshToken"]
+        self.token_expires = token_data["payload"]["exp"]
+        self.refresh_expires = token_data["refreshExpiresIn"]
+        return True
+
+    @staticmethod
+    def _sanitize(message: str) -> str:
+        """Strip echoed credentials from GraphQL error messages.
+
+        Kraken echoes the input variables in validation errors, which
+        previously put the plain-text password into HA's UI and logs.
+        """
+        message = re.sub(r"\{[^{}]*'(password|APIKey|email)'[^{}]*\}", "{...}", message)
+        return re.sub(r"sk_live_[A-Za-z0-9]+", "sk_live_***", message)
 
     async def get_account_numbers(self) -> list[str]:
         """Get all account numbers for the authenticated user."""

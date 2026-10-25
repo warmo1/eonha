@@ -10,15 +10,15 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import DOMAIN, CONF_BACKFILL_DAYS, CONF_TARGET_STATISTIC_ID, CONF_GLOW_USERNAME, CONF_GLOW_PASSWORD
+from .const import DOMAIN, CONF_BACKFILL_DAYS, CONF_TARGET_STATISTIC_ID, CONF_GLOW_USERNAME, CONF_GLOW_PASSWORD, CONF_API_KEY
 from .eon_api import EonNextAPI
 
 _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_USERNAME): str,
-        vol.Required(CONF_PASSWORD): str,
+        vol.Required(CONF_USERNAME): str,  # used as the entry title
+        vol.Required(CONF_API_KEY): str,
         vol.Optional(CONF_BACKFILL_DAYS, default=90): int,  # Default increased to 90 as discussed
         vol.Optional(CONF_TARGET_STATISTIC_ID): str,
         vol.Optional(CONF_GLOW_USERNAME): str,
@@ -37,9 +37,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            api = EonNextAPI()
+            api = EonNextAPI(api_key=user_input[CONF_API_KEY])
             try:
-                success = await api.login(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
+                success = await api.login()
                 if success:
                     return self.async_create_entry(
                         title=user_input[CONF_USERNAME], data=user_input
@@ -82,6 +82,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         target_default = options.get(CONF_TARGET_STATISTIC_ID, data.get(CONF_TARGET_STATISTIC_ID, ""))
         glow_user_default = options.get(CONF_GLOW_USERNAME, data.get(CONF_GLOW_USERNAME, ""))
         glow_pass_default = options.get(CONF_GLOW_PASSWORD, data.get(CONF_GLOW_PASSWORD, ""))
+        api_key_default = options.get(CONF_API_KEY, data.get(CONF_API_KEY, "")) or ""
 
         # Ensure strings
         if target_default is None: target_default = ""
@@ -92,6 +93,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_API_KEY,
+                        description={"suggested_value": api_key_default},
+                    ): str,
                     vol.Optional(
                         CONF_BACKFILL_DAYS,
                         description={"suggested_value": backfill_default},

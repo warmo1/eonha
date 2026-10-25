@@ -11,7 +11,7 @@ from homeassistant.helpers.httpx_client import get_async_client
 
 from .eon_api import EonNextAPI
 from .coordinator import EonNextDataUpdateCoordinator
-from .const import DOMAIN, CONF_BACKFILL_DAYS, CONF_TARGET_STATISTIC_ID, CONF_GLOW_USERNAME, CONF_GLOW_PASSWORD
+from .const import DOMAIN, CONF_BACKFILL_DAYS, CONF_TARGET_STATISTIC_ID, CONF_GLOW_USERNAME, CONF_GLOW_PASSWORD, CONF_API_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,10 +22,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     # Use HA's shared httpx client to avoid blocking SSL context loading
-    api = EonNextAPI(client=get_async_client(hass))
+    api_key = entry.options.get(CONF_API_KEY) or entry.data.get(CONF_API_KEY)
+    api = EonNextAPI(client=get_async_client(hass), api_key=api_key)
 
-    username = entry.data[CONF_USERNAME]
-    password = entry.data[CONF_PASSWORD]
+    username = entry.data.get(CONF_USERNAME)
+    password = entry.data.get(CONF_PASSWORD)
 
     # Prefer options over data (config)
     backfill_days = entry.options.get(CONF_BACKFILL_DAYS, entry.data.get(CONF_BACKFILL_DAYS, 90))
