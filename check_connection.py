@@ -1,66 +1,61 @@
+"""Verify E.ON Next API access using the integration's own client.
 
+Usage:
+    export EON_API_KEY="sk_live_..."
+    python check_connection.py
+"""
 import asyncio
+import importlib.util
 import os
 import sys
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from eonapi.api import EonNextAPI
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
 
-async def main():
-    username = os.getenv("EON_USERNAME")
-    password = os.getenv("EON_PASSWORD")
+    load_dotenv()
+except ImportError:
+    pass
 
-    if not username or not password:
-        print("Please set EON_USERNAME and EON_PASSWORD environment variables.")
+_SPEC = importlib.util.spec_from_file_location(
+    "eonha_eon_api",
+    Path(__file__).resolve().parent / "custom_components" / "eonha" / "eon_api.py",
+)
+_MOD = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_MOD)
+EonNextAPI = _MOD.EonNextAPI
+
+
+async def main() -> None:
+    api_key = os.getenv("EON_API_KEY")
+    if not api_key:
+        print("Please set the EON_API_KEY environment variable (sk_live_...).")
         sys.exit(1)
 
-    print(f"Logging in as {username}...")
-    api = EonNextAPI()
-    
+    api = EonNextAPI(api_key=api_key)
     try:
-        if await api.login(username, password):
-            print("Login successful!")
-        else:
-            print("Login failed.")
-            sys.exit(1)
-    except Exception as e:
-        print(f"Login error: {e}")
+        await api.login()
+        print("Login successful!")
+    except Exception as err:
+        print(f"Login error: {err}")
         sys.exit(1)
 
-    try:
-        accounts = await api.get_account_numbers()
-        print(f"Found accounts: {accounts}")
+    accounts = await api.get_account_numbers()
+    print(f"Found accounts: {accounts}")
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=7)
+    for account in accounts:
+        for meter in await api.get_meters(account):
+            print(f"  - ({meter['type']}) {meter['serial']} (ID: {meter['id']})")
+            data = await api.get_consumption_data(
+                account, meter["id"], meter["type"], start, end
+            )
+            if data:
+                print(f"    {len(data)} half-hours, latest {data[-1]['startAt']}")
+            else:
+                print("    no consumption in the last 7 days")
 
-        for account in accounts:
-            print(f"Fetching meters for account {account}...")
-            meters = await api.get_meters(account)
-            for meter in meters:
-                print(f"  - ({meter['type']}) {meter['serial']} (ID: {meter['id']})")
-                
-                # Fetch extensive data
-                start_date = datetime.now() - timedelta(days=90)
-                end_date = datetime.now()
-                
-                print(f"    Fetching consumption from {start_date.date()} to {end_date.date()}...")
-                data = await api.get_consumption_data(
-                    account, 
-                    meter['id'], 
-                    meter['type'], 
-                    start_date, 
-                    end_date
-                )
-                print(f"    Retrieved {len(data)} records.")
-                if data:
-                    print("    Latest 5 records:")
-                    # Sort just in case the API returns them unsorted, though usually it's chronological
-                    sorted_data = sorted(data, key=lambda x: x['startAt'])
-                    for record in sorted_data[-5:]:
-                        print(f"      {record['startAt']} -> {record['value']} kWh")
-
-    except Exception as e:
-        print(f"Error fetching data: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

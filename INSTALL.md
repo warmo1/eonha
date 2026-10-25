@@ -19,7 +19,7 @@ Since this project is set up as a git repository, the easiest way to install it 
 8.  The "E.ON Next Home Assistant" integration should appear. Click **Download**.
 9.  **Restart Home Assistant**.
 10. Go to **Settings** > **Devices & Services** > **Add Integration**.
-11. Search for **E.ON Next Home Assistant** and install.
+11. Search for **E.ON Next Home Assistant** and install. Enter your email (used as the entry title) and your `sk_live_...` API key - see *Authentication* in the README.
 
 ## Option 2: Manual Installation
 
@@ -43,9 +43,11 @@ If you prefer to install manually or are testing locally:
 
 3.  **Restart Home Assistant**.
 4.  Go to **Settings** > **Devices & Services** > **Add Integration**.
-5.  Search for **E.ON Next Home Assistant** and follow the configuration steps.
+5.  Search for **E.ON Next Home Assistant** and follow the configuration steps (you need an `sk_live_...` API key - see *Authentication* in the README).
 
 ## Troubleshooting
+
+-   **"E.ON Next no longer supports email/password login"**: add your API key via **Configure > api_key** on the integration.
 
 -   **Dependencies**: Home Assistant *should* automatically install the `eonapi` python library. If logs show errors about missing modules, you may need to check your internet connection or install it manually in the HA container.
 -   **Logs**: Check `Settings` > `System` > `Logs` for any errors related to `eonha` or `eonapi`.
