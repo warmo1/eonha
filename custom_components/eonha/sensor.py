@@ -399,13 +399,25 @@ class EonNextLatestDaySensor(EonNextBaseSensor):
 
 
 class EonNextCumulativeSensor(EonNextBaseSensor):
-    """Cumulative total/peak/off-peak sensors (informational).
+    """Cumulative total/peak/off-peak sensors (informational only).
 
-    NOTE: the Energy dashboard should use the imported 'eonha:*'
-    statistics, not these entities. E.ON data arrives 3-5 days late, so
-    live entity statistics would land in the wrong hours, and the value
-    here only covers the fetched window (it shrinks after a restart).
-    TOTAL + last_reset keeps recorder statistics coherent.
+    The value is the sum of whatever consumption is currently held, which
+    is a window that starts again (backfill_days before now) after every
+    Home Assistant restart. These sensors deliberately have NO state_class
+    and NO last_reset:
+
+    - With state_class TOTAL, each restart moved last_reset to the new
+      window start. The recorder and the Energy dashboard's cost sensors
+      treat a new last_reset as a fresh meter starting at zero, so every
+      restart re-counted the whole window (~90 days, ~3,300 kWh, ~GBP 360).
+      That is how monthly cost reached thousands of pounds.
+    - Without a state_class they get no long-term statistics and cannot
+      be picked in the Energy dashboard by mistake.
+
+    The Energy dashboard must use the imported external statistics:
+    'eonha:eon_next_<serial>_electricity_peak' / '_offpeak' for energy and
+    '..._peak_cost' / '..._offpeak_cost' as "entity tracking the total
+    costs".
     """
 
     def __init__(
@@ -417,7 +429,8 @@ class EonNextCumulativeSensor(EonNextBaseSensor):
         """Initialize a cumulative sensor."""
         super().__init__(coordinator, meter_data)
         self._kind = kind
-        self._attr_state_class = SensorStateClass.TOTAL
+        # No state_class on purpose: see class docstring.
+        self._attr_state_class = None
 
         kind_name = {
             "total": "Total",
@@ -445,8 +458,8 @@ class EonNextCumulativeSensor(EonNextBaseSensor):
         }[self._kind]
 
         self._attr_native_value = round(summary[key], 3)
-        self._attr_last_reset = summary["earliest_start"]
         self._attr_extra_state_attributes = {
+            "window_start": summary["earliest_start"].isoformat(),
             "last_reading_time": summary["latest_end"].isoformat(),
             "meter_serial": self._serial,
             "tariff_bucket": self._kind,

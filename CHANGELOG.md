@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.1 - 2026-11-26
+- **Fix inflated Energy dashboard usage/cost:** the Total / Peak / Off Peak
+  sensors no longer have a state class or `last_reset`. Their value is a
+  rolling fetch window that restarts on every HA restart; each restart moved
+  `last_reset`, so the recorder re-counted the whole window (~90 days) as
+  new consumption. They are now informational only and can't be selected in
+  the Energy dashboard; use the `eonha:*` statistics instead.
+- After updating, HA raises a "no longer has a state class" repair for these
+  sensors: choose to delete their statistics to clear the inflated history.
+- New `window_start` attribute on those sensors.
+
 ## 1.3.0 - 2026-10-25
 - **Auth:** log in with the account `sk_live_` API key. E.ON Next moved
   sign-in to Auth0 (~16 Oct 2026) and the Kraken API dropped email/password.

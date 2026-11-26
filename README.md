@@ -76,5 +76,9 @@ consumption. Static prices don't work with external statistics in HA core
 with the matching `_cost` statistic. Rates and the off-peak window
 (00:00-06:00) are set in `custom_components/eonha/energy_model.py`.
 
+Do **not** use the `sensor.e_on_next_*` Total / Peak / Off Peak entities in
+the Energy dashboard. They sum a rolling fetch window and are informational
+only; since 1.3.1 they have no state class so they can't be selected.
+
 ## Installation
 See [INSTALL.md](INSTALL.md) for installation instructions.
